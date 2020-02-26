@@ -39,14 +39,14 @@ class TrainManager:
     """ Manages training loop, validations, learning rate scheduling
     and early stopping."""
 
-    def __init__(self, model: Model, config: dict) -> None:
+    def __init__(self, model: Model, config: dict, training_key: str="training") -> None:
         """
         Creates a new TrainManager for a model, specified as in configuration.
 
         :param model: torch module defining the model
         :param config: dictionary containing the training configurations
         """
-        train_config = config["training"]
+        train_config = config[training_key]
 
         # files for logging and storing
         self.model_dir = make_model_dir(train_config["model_dir"],
@@ -55,8 +55,7 @@ class TrainManager:
         self.logger = make_logger("{}/train.log".format(self.model_dir))
         self.logging_freq = train_config.get("logging_freq", 100)
         self.valid_report_file = "{}/validations.txt".format(self.model_dir)
-        self.tb_writer = SummaryWriter(
-            log_dir=self.model_dir + "/tensorboard/")
+        self.tb_writer = SummaryWriter(log_dir=self.model_dir+"/tensorboard/")
 
         # model
         self.model = model
@@ -69,10 +68,9 @@ class TrainManager:
         self.loss = XentLoss(pad_index=self.pad_index,
                              smoothing=self.label_smoothing)
         self.normalization = train_config.get("normalization", "batch")
-        if self.normalization not in ["batch", "tokens", "none"]:
-            raise ConfigurationError("Invalid normalization option."
-                                     "Valid options: "
-                                     "'batch', 'tokens', 'none'.")
+        if self.normalization not in ["batch", "tokens"]:
+            raise ConfigurationError("Invalid normalization. "
+                                     "Valid options: 'batch', 'tokens'.")
 
         # optimization
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
@@ -87,13 +85,9 @@ class TrainManager:
         self.ckpt_queue = queue.Queue(
             maxsize=train_config.get("keep_last_ckpts", 5))
         self.eval_metric = train_config.get("eval_metric", "bleu")
-        if self.eval_metric not in ['bleu',
-                                    'chrf',
-                                    'token_accuracy',
-                                    'sequence_accuracy']:
+        if self.eval_metric not in ['bleu', 'chrf']:
             raise ConfigurationError("Invalid setting for 'eval_metric', "
-                                     "valid options: 'bleu', 'chrf', "
-                                     "'token_accuracy', 'sequence_accuracy'.")
+                                     "valid options: 'bleu', 'chrf'.")
         self.early_stopping_metric = train_config.get("early_stopping_metric",
                                                       "eval_metric")
 
@@ -105,8 +99,7 @@ class TrainManager:
         elif self.early_stopping_metric == "eval_metric":
             if self.eval_metric in ["bleu", "chrf"]:
                 self.minimize_metric = False
-            # eval metric that has to get minimized (not yet implemented)
-            else:
+            else:  # eval metric that has to get minimized (not yet implemented)
                 self.minimize_metric = True
         else:
             raise ConfigurationError(
@@ -122,7 +115,7 @@ class TrainManager:
 
         # data & batch handling
         self.level = config["data"]["level"]
-        if self.level not in ["word", "bpe", "char"]:
+        if self.level not in ["word", "bpe", "char", "syl", "bpe_drop"]:
             raise ConfigurationError("Invalid segmentation level. "
                                      "Valid options: 'word', 'bpe', 'char'.")
         self.shuffle = train_config.get("shuffle", True)
@@ -135,7 +128,6 @@ class TrainManager:
                                                 self.batch_type)
 
         self.batch_multiplier = train_config.get("batch_multiplier", 1)
-        self.current_batch_multiplier = self.batch_multiplier
 
         # generation
         self.max_output_length = train_config.get("max_output_length", None)
@@ -146,8 +138,6 @@ class TrainManager:
             self.model.cuda()
             self.loss.cuda()
 
-        # initialize accumalted batch loss (needed for batch_multiplier)
-        self.norm_batch_loss_accumulated = 0
         # initialize training statistics
         self.steps = 0
         # stop training if this flag is True by reaching learning rate minimum
@@ -191,7 +181,7 @@ class TrainManager:
             "best_ckpt_iteration": self.best_ckpt_iteration,
             "model_state": self.model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
-            "scheduler_state": self.scheduler.state_dict() if
+            "scheduler_state": self.scheduler.state_dict() if \
             self.scheduler is not None else None,
         }
         torch.save(state, model_path)
@@ -265,8 +255,6 @@ class TrainManager:
             self.model.cuda()
 
     # pylint: disable=unnecessary-comprehension
-    # pylint: disable=too-many-branches
-    # pylint: disable=too-many-statements
     def train_and_validate(self, train_data: Dataset, valid_data: Dataset) \
             -> None:
         """
@@ -279,12 +267,6 @@ class TrainManager:
                                     batch_size=self.batch_size,
                                     batch_type=self.batch_type,
                                     train=True, shuffle=self.shuffle)
-
-        # For last batch in epoch batch_multiplier needs to be adjusted
-        # to fit the number of leftover training examples
-        leftover_batch_size = len(
-            train_data) % (self.batch_multiplier * self.batch_size)
-
         for epoch_no in range(self.epochs):
             self.logger.info("EPOCH %d", epoch_no + 1)
 
@@ -297,11 +279,10 @@ class TrainManager:
             start = time.time()
             total_valid_duration = 0
             start_tokens = self.total_tokens
-            self.current_batch_multiplier = self.batch_multiplier
-            count = self.current_batch_multiplier - 1
+            count = self.batch_multiplier - 1
             epoch_loss = 0
 
-            for i, batch in enumerate(iter(train_iter)):
+            for batch in iter(train_iter):
                 # reactivate training
                 self.model.train()
                 # create a Batch object from torchtext batch
@@ -311,31 +292,14 @@ class TrainManager:
                 # see https://medium.com/@davidlmorton/
                 # increasing-mini-batch-size-without-increasing-
                 # memory-6794e10db672
-
-                # Set current_batch_mutliplier to fit
-                # number of leftover examples for last batch in epoch
-                if self.batch_multiplier > 1 and i == len(train_iter) - \
-                        math.ceil(leftover_batch_size / self.batch_size):
-                    self.current_batch_multiplier = math.ceil(
-                        leftover_batch_size / self.batch_size)
-                    count = self.current_batch_multiplier - 1
-
                 update = count == 0
                 # print(count, update, self.steps)
-                batch_loss = self._train_batch(
-                    batch, update=update, count=count)
-
-                # Only save finaly computed batch_loss of full batch
-                if update:
-                    self.tb_writer.add_scalar("train/train_batch_loss",
-                                              batch_loss, self.steps)
-
+                batch_loss = self._train_batch(batch, update=update)
+                self.tb_writer.add_scalar("train/train_batch_loss", batch_loss,
+                                          self.steps)
                 count = self.batch_multiplier if update else count
                 count -= 1
-
-                # Only add complete batch_loss of full mini-batch to epoch_loss
-                if update:
-                    epoch_loss += batch_loss.detach().cpu().numpy()
+                epoch_loss += batch_loss.detach().cpu().numpy()
 
                 if self.scheduler is not None and \
                         self.scheduler_step_at == "step" and update:
@@ -424,7 +388,7 @@ class TrainManager:
                     self.logger.info(
                         'Validation result (greedy) at epoch %3d, '
                         'step %8d: %s: %6.2f, loss: %8.4f, ppl: %8.4f, '
-                        'duration: %.4fs', epoch_no + 1, self.steps,
+                        'duration: %.4fs', epoch_no+1, self.steps,
                         self.eval_metric, valid_score, valid_loss,
                         valid_ppl, valid_duration)
 
@@ -447,13 +411,13 @@ class TrainManager:
             if self.stop:
                 self.logger.info(
                     'Training ended since minimum lr %f was reached.',
-                    self.learning_rate_min)
+                     self.learning_rate_min)
                 break
 
-            self.logger.info('Epoch %3d: total training loss %.2f',
-                             epoch_no + 1, epoch_loss)
+            self.logger.info('Epoch %3d: total training loss %.2f', epoch_no+1,
+                             epoch_loss)
         else:
-            self.logger.info('Training ended after %3d epochs.', epoch_no + 1)
+            self.logger.info('Training ended after %3d epochs.', epoch_no+1)
         self.logger.info('Best validation result (greedy) at step '
                          '%8d: %6.2f %s.', self.best_ckpt_iteration,
                          self.best_ckpt_score,
@@ -461,14 +425,12 @@ class TrainManager:
 
         self.tb_writer.close()  # close Tensorboard writer
 
-    def _train_batch(self, batch: Batch, update: bool = True,
-                     count: int = 1) -> Tensor:
+    def _train_batch(self, batch: Batch, update: bool = True) -> Tensor:
         """
         Train the model on one batch: Compute the loss, make a gradient step.
 
         :param batch: training batch
         :param update: if False, only store gradient. if True also make update
-        :param count: number of portions (batch_size) left before update
         :return: loss for batch (sum)
         """
         batch_loss = self.model.get_loss_for_batch(
@@ -479,30 +441,21 @@ class TrainManager:
             normalizer = batch.nseqs
         elif self.normalization == "tokens":
             normalizer = batch.ntokens
-        elif self.normalization == "none":
-            normalizer = 1
         else:
-            raise NotImplementedError(
-                "Only normalize by 'batch' or 'tokens' "
-                "or summation of loss 'none' implemented")
+            raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
         norm_batch_loss = batch_loss / normalizer
+        # division needed since loss.backward sums the gradients until updated
+        norm_batch_multiply = norm_batch_loss / self.batch_multiplier
+
+        # compute gradients
+        norm_batch_multiply.backward()
+
+        if self.clip_grad_fun is not None:
+            # clip gradients (in-place)
+            self.clip_grad_fun(params=self.model.parameters())
 
         if update:
-            if self.current_batch_multiplier > 1:
-                norm_batch_loss = self.norm_batch_loss_accumulated + \
-                    norm_batch_loss
-                norm_batch_loss = norm_batch_loss / \
-                    self.current_batch_multiplier if \
-                    self.normalization != "none" else \
-                    norm_batch_loss
-
-            norm_batch_loss.backward()
-
-            if self.clip_grad_fun is not None:
-                # clip gradients (in-place)
-                self.clip_grad_fun(params=self.model.parameters())
-
             # make gradient step
             self.optimizer.step()
             self.optimizer.zero_grad()
@@ -510,12 +463,6 @@ class TrainManager:
             # increment step counter
             self.steps += 1
 
-        else:
-            if count == self.current_batch_multiplier - 1:
-                self.norm_batch_loss_accumulated = norm_batch_loss
-            else:
-                # accumulate loss of current batch_size * batch_multiplier loss
-                self.norm_batch_loss_accumulated += norm_batch_loss
         # increment token counter
         self.total_tokens += batch.ntokens
 

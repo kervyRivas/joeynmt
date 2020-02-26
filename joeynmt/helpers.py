@@ -176,6 +176,33 @@ def bpe_postprocess(string) -> str:
     return string.replace("@@ ", "")
 
 
+def char_postprocess(string) -> str:
+    """
+    Post-processor for BPE output. Recombines BPE-split tokens.
+
+    :param string:
+    :return: post-processed string
+    """
+    return string.replace(" ", "").replace("@@", " ")
+
+def syl_postprocess(string) -> str:
+    """
+    Post-processor for BPE output. Recombines BPE-split tokens.
+
+    :param string:
+    :return: post-processed string
+    """
+    return string.replace(" ", "").replace("@@", " ")
+
+def bpe_drop_postprocess(string) -> str:
+    """
+    Post-processor for BPE output. Recombines BPE-split tokens.
+
+    :param string:
+    :return: post-processed string
+    """
+    return string.replace("+", "").replace("@@ ", "")
+
 def store_attention_plots(attentions: np.array, targets: List[List[str]],
                           sources: List[List[str]],
                           output_prefix: str, indices: List[int],
