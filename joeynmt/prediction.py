@@ -169,7 +169,9 @@ def test(cfg_file,
          ckpt: str,
          output_path: str = None,
          save_attention: bool = False,
-         logger: Logger = None) -> None:
+         logger: Logger = None,
+         key_training: str = "training",
+         key_data: str = "data") -> None:
     """
     Main test function. Handles loading a model from checkpoint, generating
     translations and storing them and attention plots.
@@ -191,7 +193,7 @@ def test(cfg_file,
 
     # when checkpoint is not specified, take latest (best) from model dir
     if ckpt is None:
-        model_dir = cfg["training"]["model_dir"]
+        model_dir = cfg[key_training]["model_dir"]
         ckpt = get_latest_checkpoint(model_dir)
         if ckpt is None:
             raise FileNotFoundError("No checkpoint found in directory {}."
@@ -201,18 +203,18 @@ def test(cfg_file,
         except IndexError:
             step = "best"
 
-    batch_size = cfg["training"].get(
+    batch_size = cfg[key_training].get(
         "eval_batch_size", cfg["training"]["batch_size"])
-    batch_type = cfg["training"].get(
+    batch_type = cfg[key_training].get(
         "eval_batch_type", cfg["training"].get("batch_type", "sentence"))
-    use_cuda = cfg["training"].get("use_cuda", False)
-    level = cfg["data"]["level"]
-    eval_metric = cfg["training"]["eval_metric"]
-    max_output_length = cfg["training"].get("max_output_length", None)
+    use_cuda = cfg[key_training].get("use_cuda", False)
+    level = cfg[key_data]["level"]
+    eval_metric = cfg[key_training]["eval_metric"]
+    max_output_length = cfg[key_training].get("max_output_length", None)
 
     # load the data
     _, dev_data, test_data, src_vocab, trg_vocab = load_data(
-        data_cfg=cfg["data"])
+        data_cfg=cfg[key_data])
 
     data_to_predict = {"dev": dev_data, "test": test_data}
 
@@ -279,7 +281,6 @@ def test(cfg_file,
                 for hyp in hypotheses:
                     out_file.write(hyp + "\n")
             logger.info("Translations saved to: %s", output_path_set)
-
 
 def translate(cfg_file, ckpt: str, output_path: str = None) -> None:
     """

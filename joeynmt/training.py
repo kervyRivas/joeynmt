@@ -13,6 +13,7 @@ import queue
 
 import math
 import numpy as np
+from logging import Logger
 
 import torch
 from torch import Tensor
@@ -20,11 +21,11 @@ from torch.utils.tensorboard import SummaryWriter
 
 from torchtext.data import Dataset
 
-from joeynmt.model import build_model
+from joeynmt.model import build_model, build_pretrained_model
 from joeynmt.batch import Batch
 from joeynmt.helpers import log_data_info, load_config, log_cfg, \
     store_attention_plots, load_checkpoint, make_model_dir, \
-    make_logger, set_seed, symlink_update, ConfigurationError
+    make_logger, set_seed, symlink_update, ConfigurationError, build_matrix
 from joeynmt.model import Model
 from joeynmt.prediction import validate_on_data
 from joeynmt.loss import XentLoss
@@ -39,7 +40,7 @@ class TrainManager:
     """ Manages training loop, validations, learning rate scheduling
     and early stopping."""
 
-    def __init__(self, model: Model, config: dict, training_key: str="training") -> None:
+    def __init__(self, model: Model, config: dict, training_key: str="training", logger: Logger=None) -> None:
         """
         Creates a new TrainManager for a model, specified as in configuration.
 
@@ -52,7 +53,10 @@ class TrainManager:
         self.model_dir = make_model_dir(train_config["model_dir"],
                                         overwrite=train_config.get(
                                             "overwrite", False))
-        self.logger = make_logger("{}/train.log".format(self.model_dir))
+        if logger is None:
+            self.logger = make_logger("{}/train.log".format(self.model_dir))
+        else:
+            self.logger = logger
         self.logging_freq = train_config.get("logging_freq", 100)
         self.valid_report_file = "{}/validations.txt".format(self.model_dir)
         self.tb_writer = SummaryWriter(log_dir=self.model_dir+"/tensorboard/")
@@ -553,7 +557,102 @@ class TrainManager:
             for hyp in hypotheses:
                 opened_file.write("{}\n".format(hyp))
 
+def train_transfer(cfg_file: str) -> None:
+    """
+    Main training function. After training, also test on test data if given.
 
+    :param cfg_file: path to configuration yaml file
+    """
+    cfg = load_config(cfg_file)
+
+    # set the random seed
+    set_seed(seed=cfg["pretraining"].get("random_seed", 42))
+
+    # load the data
+    pre_train_data, pre_dev_data, pre_test_data, pre_src_vocab, pre_trg_vocab = load_data(
+        data_cfg=cfg["pretrained_data"])
+
+    # build an encoder-decoder model
+    pretrained_model = build_model(cfg["model"], src_vocab=pre_src_vocab, trg_vocab=pre_trg_vocab)
+
+    # for training management, e.g. early stopping and model selection
+    trainer = TrainManager(model=pretrained_model, config=cfg, training_key="pretraining")
+
+    # store copy of original training config in model dir
+    shutil.copy2(cfg_file, trainer.model_dir+"/config.yaml")
+
+    # log all entries of config
+    log_cfg(cfg, trainer.logger)
+
+    log_data_info(train_data=pre_train_data, valid_data=pre_dev_data,
+                  test_data=pre_test_data, src_vocab=pre_src_vocab, trg_vocab=pre_trg_vocab,
+                  logging_function=trainer.logger.info)
+
+    trainer.logger.info(str(pretrained_model))
+
+    # store the vocabs
+    src_vocab_file = "{}/src_vocab.txt".format(cfg["pretraining"]["model_dir"])
+    pre_src_vocab.to_file(src_vocab_file)
+    trg_vocab_file = "{}/trg_vocab.txt".format(cfg["pretraining"]["model_dir"])
+    pre_trg_vocab.to_file(trg_vocab_file)
+
+    # train the model
+    trainer.train_and_validate(train_data=pre_train_data, valid_data=pre_dev_data)
+
+    # predict with the best model on validation and test
+    # (if test data is available)
+    ckpt = "{}/{}.ckpt".format(trainer.model_dir, trainer.best_ckpt_iteration)
+    output_name = "{:08d}.hyps".format(trainer.best_ckpt_iteration)
+    output_path = os.path.join(trainer.model_dir, output_name)
+    test(cfg_file, ckpt=ckpt, output_path=output_path, logger=trainer.logger,
+        key_training="pretraining", key_data="pretrained_data")
+    
+    # set the random seed
+    set_seed(seed=cfg["training"].get("random_seed", 42))
+
+    # load the data
+    train_data, dev_data, test_data, src_vocab, trg_vocab = load_data(
+        data_cfg=cfg["data"])
+
+    # build an encoder-decoder model
+    model = build_pretrained_model(cfg["model"], 
+                                   pretrained_model=pretrained_model, 
+                                   pretrained_src_vocab=pre_src_vocab,
+                                   src_vocab=src_vocab, 
+                                   trg_vocab=trg_vocab)
+
+    # for training management, e.g. early stopping and model selection
+    trainer = TrainManager(model=model, config=cfg, training_key="training", logger=trainer.logger)
+
+    # store copy of original training config in model dir
+    shutil.copy2(cfg_file, trainer.model_dir+"/config.yaml")
+
+    # log all entries of config
+    log_cfg(cfg, trainer.logger)
+
+    log_data_info(train_data=train_data, valid_data=dev_data,
+                  test_data=test_data, src_vocab=src_vocab, trg_vocab=trg_vocab,
+                  logging_function=trainer.logger.info)
+
+    trainer.logger.info(str(model))
+
+    # store the vocabs
+    src_vocab_file = "{}/src_vocab.txt".format(cfg["training"]["model_dir"])
+    src_vocab.to_file(src_vocab_file)
+    trg_vocab_file = "{}/trg_vocab.txt".format(cfg["training"]["model_dir"])
+    trg_vocab.to_file(trg_vocab_file)
+
+    # train the model
+    trainer.train_and_validate(train_data=train_data, valid_data=dev_data)
+
+    # predict with the best model on validation and test
+    # (if test data is available)
+    ckpt = "{}/{}.ckpt".format(trainer.model_dir, trainer.best_ckpt_iteration)
+    output_name = "{:08d}.hyps".format(trainer.best_ckpt_iteration)
+    output_path = os.path.join(trainer.model_dir, output_name)
+    test(cfg_file, ckpt=ckpt, output_path=output_path, logger=trainer.logger,
+        key_training="training", key_data="data")
+    
 def train(cfg_file: str) -> None:
     """
     Main training function. After training, also test on test data if given.

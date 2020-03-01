@@ -5,6 +5,7 @@ Module to represents whole models
 
 import numpy as np
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
@@ -17,7 +18,7 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
 from joeynmt.batch import Batch
-from joeynmt.helpers import ConfigurationError
+from joeynmt.helpers import ConfigurationError, set_requires_grad
 
 
 class Model(nn.Module):
@@ -196,6 +197,95 @@ class Model(nn.Module):
                "\ttrg_embed=%s)" % (self.__class__.__name__, self.encoder,
                    self.decoder, self.src_embed, self.trg_embed)
 
+def build_pretrained_model(cfg: dict = None,
+                pretrained_model: Model = None,
+                pretrained_src_vocab: Vocabulary = None,
+                src_vocab: Vocabulary = None,
+                trg_vocab: Vocabulary = None) -> Model:
+    """
+    Build and initialize the model according to the configuration.
+
+    :param cfg: dictionary configuration containing model specifications
+    :param src_vocab: source vocabulary
+    :param trg_vocab: target vocabulary
+    :return: built and initialized model
+    """
+    src_padding_idx = src_vocab.stoi[PAD_TOKEN]
+    trg_padding_idx = trg_vocab.stoi[PAD_TOKEN]
+
+    src_embed = Embeddings(
+        **cfg["encoder"]["embeddings"], vocab_size=len(src_vocab),
+        padding_idx=src_padding_idx)
+
+    embedding_matrix = np.zeros((len(src_vocab), src_embed.embedding_dim))
+    unknown_words = []
+    for w in pretrained_src_vocab.itos:
+        try:
+            pre_ix = pretrained_src_vocab.stoi[w]
+            ix = src_vocab.stoi[w]
+            embedding_matrix[ix] = pretrained_model.src_embed.lut.weight[pre_ix].cpu().detach().numpy()
+        except KeyError:
+            unknown_words.append(w)
+    
+    src_embed.lut.weight = torch.nn.Parameter(torch.tensor(embedding_matrix, dtype=torch.float32))
+
+    trg_embed = Embeddings(
+            **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
+            padding_idx=trg_padding_idx)
+
+    # build decoder
+    dec_dropout = cfg["decoder"].get("dropout", 0.)
+    dec_emb_dropout = cfg["decoder"]["embeddings"].get("dropout", dec_dropout)
+    
+    encoder = pretrained_model.encoder
+    encoder.train()
+    set_requires_grad(encoder, True)
+
+    # build encoder
+    #enc_dropout = cfg["encoder"].get("dropout", 0.)
+    #enc_emb_dropout = cfg["encoder"]["embeddings"].get("dropout", enc_dropout)
+    #if cfg["encoder"].get("type", "recurrent") == "transformer":
+    #    assert cfg["encoder"]["embeddings"]["embedding_dim"] == \
+    #           cfg["encoder"]["hidden_size"], \
+    #           "for transformer, emb_size must be hidden_size"
+
+    #    encoder = TransformerEncoder(**cfg["encoder"],
+    #                                 emb_size=src_embed.embedding_dim,
+    #                                 emb_dropout=enc_emb_dropout)
+    #else:
+    #    encoder = RecurrentEncoder(**cfg["encoder"],
+    #                               emb_size=src_embed.embedding_dim,
+    #                               emb_dropout=enc_emb_dropout)
+    
+    if cfg["decoder"].get("type", "recurrent") == "transformer":
+        decoder = TransformerDecoder(
+            **cfg["decoder"], encoder=encoder, vocab_size=len(trg_vocab),
+            emb_size=trg_embed.embedding_dim, emb_dropout=dec_emb_dropout)
+    else:
+        decoder = RecurrentDecoder(
+            **cfg["decoder"], encoder=encoder, vocab_size=len(trg_vocab),
+            emb_size=trg_embed.embedding_dim, emb_dropout=dec_emb_dropout)
+
+    model = Model(encoder=encoder, decoder=decoder,
+                  src_embed=src_embed, trg_embed=trg_embed,
+                  src_vocab=pretrained_model.src_vocab, trg_vocab=trg_vocab)
+
+    # tie softmax layer with trg embeddings
+    if cfg.get("tied_softmax", False):
+        if trg_embed.lut.weight.shape == \
+                model.decoder.output_layer.weight.shape:
+            # (also) share trg embeddings and softmax layer:
+            model.decoder.output_layer.weight = trg_embed.lut.weight
+        else:
+            raise ConfigurationError(
+                "For tied_softmax, the decoder embedding_dim and decoder "
+                "hidden_size must be the same."
+                "The decoder must be a Transformer.")
+
+    # custom initialization of model parameters
+    initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
+
+    return model
 
 def build_model(cfg: dict = None,
                 src_vocab: Vocabulary = None,

@@ -1,6 +1,7 @@
 import argparse
 
 from joeynmt.training import train
+from joeynmt.training import train_transfer
 from joeynmt.prediction import test
 from joeynmt.prediction import translate
 
@@ -27,6 +28,8 @@ def main():
 
     if args.mode == "train":
         train(cfg_file=args.config_path)
+    elif args.mode == "train_transfer":
+        train_transfer(cfg_file=args.config_path)
     elif args.mode == "test":
         test(cfg_file=args.config_path, ckpt=args.ckpt,
              output_path=args.output_path, save_attention=args.save_attention)

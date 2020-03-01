@@ -27,7 +27,23 @@ from joeynmt.plotting import plot_heatmap
 class ConfigurationError(Exception):
     """ Custom exception for misspecifications of configuration """
 
-
+def set_requires_grad(module, val):
+    for p in module.parameters():
+        p = p.detach()
+        p.requires_grad = val
+    
+def build_matrix(word_index, path):
+    embedding_index = load_embeddings(path)
+    embedding_matrix = np.zeros((len(word_index) + 1, 300))
+    unknown_words = []
+    
+    for word, i in word_index.items():
+        try:
+            embedding_matrix[i] = embedding_index[word]
+        except KeyError:
+            unknown_words.append(word)
+    return embedding_matrix, unknown_words
+    
 def make_model_dir(model_dir: str, overwrite=False) -> str:
     """
     Create a new directory for the model.
