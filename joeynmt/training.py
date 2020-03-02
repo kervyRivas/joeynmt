@@ -40,7 +40,7 @@ class TrainManager:
     """ Manages training loop, validations, learning rate scheduling
     and early stopping."""
 
-    def __init__(self, model: Model, config: dict, training_key: str="training", logger: Logger=None) -> None:
+    def __init__(self, model: Model, config: dict, training_key: str="training", logger: Logger=None, name_log: str="train") -> None:
         """
         Creates a new TrainManager for a model, specified as in configuration.
 
@@ -54,7 +54,7 @@ class TrainManager:
                                         overwrite=train_config.get(
                                             "overwrite", False))
         if logger is None:
-            self.logger = make_logger("{}/train.log".format(self.model_dir))
+            self.logger = make_logger("{}/{}.log".format(self.model_dir, name_log))
         else:
             self.logger = logger
         self.logging_freq = train_config.get("logging_freq", 100)
@@ -576,7 +576,7 @@ def train_transfer(cfg_file: str) -> None:
     pretrained_model = build_model(cfg["model"], src_vocab=pre_src_vocab, trg_vocab=pre_trg_vocab)
 
     # for training management, e.g. early stopping and model selection
-    trainer = TrainManager(model=pretrained_model, config=cfg, training_key="pretraining")
+    trainer = TrainManager(model=pretrained_model, config=cfg, training_key="pretraining", name_log="pre_train")
 
     # store copy of original training config in model dir
     shutil.copy2(cfg_file, trainer.model_dir+"/config.yaml")
@@ -622,7 +622,7 @@ def train_transfer(cfg_file: str) -> None:
                                    trg_vocab=trg_vocab)
 
     # for training management, e.g. early stopping and model selection
-    trainer = TrainManager(model=model, config=cfg, training_key="training", logger=trainer.logger)
+    trainer = TrainManager(model=model, config=cfg, training_key="training")
 
     # store copy of original training config in model dir
     shutil.copy2(cfg_file, trainer.model_dir+"/config.yaml")

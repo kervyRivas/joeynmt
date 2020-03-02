@@ -11,7 +11,8 @@ import numpy as np
 import torch
 from torchtext.data import Dataset, Field
 
-from joeynmt.helpers import bpe_postprocess, load_config, make_logger,\
+from joeynmt.helpers import bpe_postprocess, char_postprocess, syl_postprocess\
+    load_config, make_logger,\
     get_latest_checkpoint, load_checkpoint, store_attention_plots
 from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
 from joeynmt.model import build_model, Model
@@ -139,6 +140,19 @@ def validate_on_data(model: Model, data: Dataset,
                                 for v in valid_references]
             valid_hypotheses = [bpe_postprocess(v) for
                                 v in valid_hypotheses]
+        elif level == "char":
+            valid_sources = [char_postprocess(s) for s in valid_sources]
+            valid_references = [char_postprocess(v)
+                                for v in valid_references]
+            valid_hypotheses = [char_postprocess(v) for
+                                v in valid_hypotheses]
+        elif level == "syl":
+            valid_sources = [syl_postprocess(s) for s in valid_sources]
+            valid_references = [syl_postprocess(v)
+                                for v in valid_references]
+            valid_hypotheses = [syl_postprocess(v) for
+                                v in valid_hypotheses]
+
 
         # if references are given, evaluate against them
         if valid_references:
