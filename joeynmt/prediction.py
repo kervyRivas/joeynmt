@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torchtext.data import Dataset, Field
 
-from joeynmt.helpers import bpe_postprocess, char_postprocess, syl_postprocess\
+from joeynmt.helpers import bpe_postprocess, char_postprocess, syl_postprocess,\
     load_config, make_logger,\
     get_latest_checkpoint, load_checkpoint, store_attention_plots
 from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
