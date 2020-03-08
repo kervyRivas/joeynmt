@@ -9,7 +9,7 @@ from joeynmt.prediction import translate
 def main():
     ap = argparse.ArgumentParser("Joey NMT")
 
-    ap.add_argument("mode", choices=["train", "test", "translate"],
+    ap.add_argument("mode", choices=["train", "test", "translate", "train_transfer"],
                     help="train a model or test or translate")
 
     ap.add_argument("config_path", type=str,

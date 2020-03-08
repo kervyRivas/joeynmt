@@ -199,7 +199,7 @@ def char_postprocess(string) -> str:
     :param string:
     :return: post-processed string
     """
-    return string.replace(" ", "").replace("@@", " ")
+    return string.replace(" ", "").replace("@@", " ").strip(" ")
 
 def syl_postprocess(string) -> str:
     """
@@ -208,7 +208,7 @@ def syl_postprocess(string) -> str:
     :param string:
     :return: post-processed string
     """
-    return string.replace(" ", "").replace("@@", " ")
+    return string.replace(" ", "").replace("@@", " ").strip(" ")
 
 def bpe_drop_postprocess(string) -> str:
     """

@@ -283,7 +283,7 @@ def build_pretrained_model(cfg: dict = None,
                 "The decoder must be a Transformer.")
 
     # custom initialization of model parameters
-    initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
+    #initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
 
     return model
 
